@@ -585,3 +585,94 @@ def PadImageBufferToNx512(img, padValue):
 
     img.ChangeMemoryType(mt)
     return imgPadded
+
+#-------------------------------------------------------------------
+
+def RotateImage(img, deltaPhi):
+    # img.MoveToGPU()
+    img.ReIm2AmPh()
+    img.MoveToCPU()
+    deltaPhiRad = deltaPhi * np.pi / 180.0
+    rMax = np.sqrt((img.width / 2.0) ** 2 + (img.height / 2.0) ** 2)
+    rotWidth = int(np.ceil(2 * rMax * np.cos(deltaPhiRad % (np.pi / 4.0))))
+    rotHeight = rotWidth
+    imgRotated = ImageWithBuffer(rotHeight, rotWidth, img.cmpRepr, img.memType, img.defocus, img.numInSeries)
+    pixels01 = np.zeros(imgRotated.amPh.am.shape, dtype=bool)
+
+    # rotation
+
+    # blockDim, gridDim = ccfg.DetermineCudaConfigNew(img.amPh.am.shape)
+    # RotateImage_dev[gridDim, blockDim](img.amPh.am, imgRotated.amPh.am, deltaPhiRad)
+
+    for y00 in range(img.height):
+        for x00 in range(img.width):
+            y0 = int(y00 - img.height / 2)
+            x0 = int(x00 - img.width / 2)
+            dr = 2 * np.abs(complex(x0, y0)) * np.sin(deltaPhiRad / 2)
+            dx = dr * np.cos(deltaPhiRad)
+            dy = dr * np.sin(deltaPhiRad)
+            x = x0 + dx + rotWidth
+            y = y0 + dy + rotHeight
+
+            pixels01[y, x] = True
+            imgRotated.amPh.am[y, x] = img.amPh.am[y00, x00]
+
+    # for y00 in range(img.height):
+    #     for x00 in range(img.width):
+    #         y0 = int(y00 - img.height / 2)
+    #         x0 = int(x00 - img.width / 2)
+    #         r0 = np.sqrt(x0 * x0 + y0 * y0)
+    #         phi0 = np.arctan2(y0, x0)
+    #         phi = phi0 - deltaPhiRad
+    #         x = int(r0 * np.cos(phi) + rotWidth / 2)
+    #         y = int(r0 * np.sin(phi) + rotHeight / 2)
+    #
+    #         pixels01[y, x] = True
+    #         imgRotated.amPh.am[y, x] = img.amPh.am[y00, x00]
+
+    DisplayAmpImage(imgRotated)
+    # imgRotated.MoveToCPU()
+    #
+    # # interpolation
+    #
+    # for y in range(imgRotated.height):
+    #     for x in range(imgRotated.width):
+    #         if not pixels01[y, x]:
+    #             yRange = [yy for yy in range(y - 1, y + 2) if 0 <= yy < imgRotated.height]
+    #             xRange = [xx for xx in range(x - 1, x + 2) if 0 <= xx < imgRotated.height]
+    #             tfNhood = pixels01[yRange[0]:yRange[len(yRange)-1]+1, xRange[0]:xRange[len(xRange)-1]+1]
+    #             num = sum(sum(tfNhood))
+    #
+    #             if num > 0:
+    #                 pxNhood = imgRotated.amPh.am[yRange[0]:yRange[len(yRange)-1]+1, xRange[0]:xRange[len(xRange)-1]+1]
+    #                 dafuq = tfNhood * pxNhood
+    #                 suma = sum(sum(dafuq))
+    #                 imgRotated.amPh.am[y, x] = suma / num
+    #
+    # DisplayAmpImage(imgRotated)
+
+#-------------------------------------------------------------------
+
+# @cuda.jit('void(complex64[:], float32[:], float32[:])')
+# def XY2RadPhi_dev(xy, r, phi):
+#     cx, cy = cuda.grid(2)
+#     r[cx, cy] = cmath.sqrt(xy[cx, cy][0] ** 2 + xy[cx, cy][1] ** 2)
+#     phi[cx, cy] = cmath.arctan2(xy[cx, cy][1], xy[cx, cy][0])
+
+#-------------------------------------------------------------------
+
+# @cuda.jit('void(float32[:], float32[:], float32)')
+# def RotateImage_dev(img, imgRot, deltaPhi):
+#     x0, y0 = cuda.grid(2)
+#     if x0 >= img.shape[0] or y0 >= img.shape[1]:
+#         return
+#     r0, phi0 = cmath.polar(complex(x0 - img.shape[0] / 2, y0 - img.shape[1] / 2))
+#     x1 = int(r0 * np.cos(phi0 - deltaPhi) + imgRot.shape[0] / 2)
+#     y1 = int(r0 * np.sin(phi0 - deltaPhi) + imgRot.shape[1] / 2)
+#     imgRot[y1, x1] = img[y0, x0]
+
+#-------------------------------------------------------------------
+
+def Degrees(angle):
+    return angle * 180 / np.pi
+
