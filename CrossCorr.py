@@ -229,6 +229,11 @@ def MaximizeMCFCore(img1, img2, nDiv, fragCoords, dfStepMin, dfStepMax, dfStepCh
 
 #-------------------------------------------------------------------
 
+def MaximizeMCFvsRotation(img1, img2):
+    pass
+
+#-------------------------------------------------------------------
+
 def GetShift(ccf):
     dt = ccf.cmpRepr
     mt = ccf.memType
