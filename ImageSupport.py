@@ -1,7 +1,7 @@
 import numpy as np
 from PIL import Image as im
 from numba import cuda
-import cmath
+import math, cmath
 import Constants as const
 import CudaConfig as ccfg
 import CrossCorr as cc
@@ -589,67 +589,33 @@ def PadImageBufferToNx512(img, padValue):
 #-------------------------------------------------------------------
 
 def RotateImage(img, deltaPhi):
-    # img.MoveToGPU()
+    img.MoveToGPU()
     img.ReIm2AmPh()
-    img.MoveToCPU()
+    piBy4 = np.pi / 4
     deltaPhiRad = deltaPhi * np.pi / 180.0
     rMax = np.sqrt((img.width / 2.0) ** 2 + (img.height / 2.0) ** 2)
-    rotWidth = int(np.ceil(2 * rMax * np.cos(deltaPhiRad % (np.pi / 4.0))))
+    if (deltaPhiRad // piBy4 + 1) % 2:
+        angle = piBy4 - (deltaPhiRad % piBy4)
+    else:
+        angle = deltaPhiRad % piBy4
+    rotWidth = int(np.ceil(2 * rMax * np.cos(angle)))
     rotHeight = rotWidth
-    imgRotated = ImageWithBuffer(rotHeight, rotWidth, img.cmpRepr, img.memType, img.defocus, img.numInSeries)
-    pixels01 = np.zeros(imgRotated.amPh.am.shape, dtype=bool)
+    imgRotated = Image(rotHeight, rotWidth, img.cmpRepr, img.memType)
+    filled = cuda.to_device(np.zeros(imgRotated.amPh.am.shape, dtype=np.int32))
 
     # rotation
 
-    # blockDim, gridDim = ccfg.DetermineCudaConfigNew(img.amPh.am.shape)
-    # RotateImage_dev[gridDim, blockDim](img.amPh.am, imgRotated.amPh.am, deltaPhiRad)
+    blockDim, gridDim = ccfg.DetermineCudaConfigNew(img.amPh.am.shape)
+    RotateImage_dev[gridDim, blockDim](img.amPh.am, imgRotated.amPh.am, filled, deltaPhiRad)
 
-    for y00 in range(img.height):
-        for x00 in range(img.width):
-            y0 = int(y00 - img.height / 2)
-            x0 = int(x00 - img.width / 2)
-            dr = 2 * np.abs(complex(x0, y0)) * np.sin(deltaPhiRad / 2)
-            dx = dr * np.cos(deltaPhiRad)
-            dy = dr * np.sin(deltaPhiRad)
-            x = x0 + dx + rotWidth
-            y = y0 + dy + rotHeight
+    DisplayAmpImage(img)
+    DisplayAmpImage(imgRotated)
 
-            pixels01[y, x] = True
-            imgRotated.amPh.am[y, x] = img.amPh.am[y00, x00]
-
-    # for y00 in range(img.height):
-    #     for x00 in range(img.width):
-    #         y0 = int(y00 - img.height / 2)
-    #         x0 = int(x00 - img.width / 2)
-    #         r0 = np.sqrt(x0 * x0 + y0 * y0)
-    #         phi0 = np.arctan2(y0, x0)
-    #         phi = phi0 - deltaPhiRad
-    #         x = int(r0 * np.cos(phi) + rotWidth / 2)
-    #         y = int(r0 * np.sin(phi) + rotHeight / 2)
-    #
-    #         pixels01[y, x] = True
-    #         imgRotated.amPh.am[y, x] = img.amPh.am[y00, x00]
+    imgRotated.MoveToGPU()
+    blockDim, gridDim = ccfg.DetermineCudaConfigNew(imgRotated.amPh.am.shape)
+    InterpolateMissingPixels_dev[gridDim, blockDim](imgRotated.amPh.am, filled)
 
     DisplayAmpImage(imgRotated)
-    # imgRotated.MoveToCPU()
-    #
-    # # interpolation
-    #
-    # for y in range(imgRotated.height):
-    #     for x in range(imgRotated.width):
-    #         if not pixels01[y, x]:
-    #             yRange = [yy for yy in range(y - 1, y + 2) if 0 <= yy < imgRotated.height]
-    #             xRange = [xx for xx in range(x - 1, x + 2) if 0 <= xx < imgRotated.height]
-    #             tfNhood = pixels01[yRange[0]:yRange[len(yRange)-1]+1, xRange[0]:xRange[len(xRange)-1]+1]
-    #             num = sum(sum(tfNhood))
-    #
-    #             if num > 0:
-    #                 pxNhood = imgRotated.amPh.am[yRange[0]:yRange[len(yRange)-1]+1, xRange[0]:xRange[len(xRange)-1]+1]
-    #                 dafuq = tfNhood * pxNhood
-    #                 suma = sum(sum(dafuq))
-    #                 imgRotated.amPh.am[y, x] = suma / num
-    #
-    # DisplayAmpImage(imgRotated)
 
 #-------------------------------------------------------------------
 
@@ -661,15 +627,50 @@ def RotateImage(img, deltaPhi):
 
 #-------------------------------------------------------------------
 
-# @cuda.jit('void(float32[:], float32[:], float32)')
-# def RotateImage_dev(img, imgRot, deltaPhi):
-#     x0, y0 = cuda.grid(2)
-#     if x0 >= img.shape[0] or y0 >= img.shape[1]:
-#         return
-#     r0, phi0 = cmath.polar(complex(x0 - img.shape[0] / 2, y0 - img.shape[1] / 2))
-#     x1 = int(r0 * np.cos(phi0 - deltaPhi) + imgRot.shape[0] / 2)
-#     y1 = int(r0 * np.sin(phi0 - deltaPhi) + imgRot.shape[1] / 2)
-#     imgRot[y1, x1] = img[y0, x0]
+@cuda.jit('void(float32[:, :], float32[:, :], int32[:, :], float32)')
+def RotateImage_dev(img, imgRot, filled, deltaPhi):
+    x0, y0 = cuda.grid(2)
+    if x0 >= img.shape[0] or y0 >= img.shape[1]:
+        return
+    r0, phi0 = cmath.polar(complex(x0 - img.shape[0] / 2, y0 - img.shape[1] / 2))
+    # z1 = cmath.rect(r0, phi0 - deltaPhi)
+    # x1 = int(z1.real + imgRot.shape[0] / 2)
+    # y1 = int(z1.imag + imgRot.shape[1] / 2)
+    x1 = int(r0 * math.cos(phi0 - deltaPhi) + imgRot.shape[0] / 2)
+    y1 = int(r0 * math.sin(phi0 - deltaPhi) + imgRot.shape[1] / 2)
+    imgRot[y1, x1] = img[y0, x0]
+    filled[y1, x1] = 1
+
+#-------------------------------------------------------------------
+
+@cuda.jit('void(float32[:, :], int32[:, :])')
+def InterpolateMissingPixels_dev(img, filled):
+    x, y = cuda.grid(2)
+    if x >= img.shape[0] or y >= img.shape[1]:
+        return
+
+    if filled[y, x] > 0:
+        return
+
+    x1 = x - (x > 0)
+    y1 = y - (y > 0)
+    x2 = x + (x < img.shape[0]-1)
+    y2 = y + (y < img.shape[1]-1)
+
+    nHoodSum = 0.0
+    nPixels = 0
+    for yy in range(y1, y2):
+        for xx in range(x1, x2):
+            nHoodSum += img[yy, xx] * filled[yy, xx]
+            nPixels += filled[yy, xx]
+
+    # nHoodSum = img[y1, x] * filled[y1, x] +\
+    #            img[y2, x] * filled[y2, x] +\
+    #            img[y, x1] * filled[y, x1] +\
+    #            img[y, x2] * filled[y, x2]
+    # nPixels = filled[y1, x] + filled[y2, x] + filled[y, x1] + filled[y, x2]
+
+    img[y, x] = nHoodSum / nPixels
 
 #-------------------------------------------------------------------
 
