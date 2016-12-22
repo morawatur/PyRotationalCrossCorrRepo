@@ -606,6 +606,7 @@ def RotateImage(img, deltaPhi):
     # rotation
 
     blockDim, gridDim = ccfg.DetermineCudaConfigNew(img.amPh.am.shape)
+    # dorobic funkcje RotateImage wywolujaca RotateImage_dev z poziomu hosta
     RotateImage_dev[gridDim, blockDim](img.amPh.am, imgRotated.amPh.am, filled, deltaPhiRad)
 
     DisplayAmpImage(img)
@@ -616,6 +617,10 @@ def RotateImage(img, deltaPhi):
     InterpolateMissingPixels_dev[gridDim, blockDim](imgRotated.amPh.am, filled)
 
     DisplayAmpImage(imgRotated)
+
+    cropCoords = DetermineCropCoordsAfterRotation(img.width, imgRotated.width, deltaPhi)
+    imgRotCropped = CropImageROICoords(imgRotated, cropCoords)
+    DisplayAmpImage(imgRotCropped)
 
 #-------------------------------------------------------------------
 
@@ -673,6 +678,20 @@ def InterpolateMissingPixels_dev(img, filled):
     img[y, x] = nHoodSum / nPixels
 
 #-------------------------------------------------------------------
+
+def DetermineCropCoordsAfterRotation(imgDim, rotDim, angle):
+    angleRad = Radians(angle)
+    newDim = (1 / np.sqrt(2)) * imgDim / np.cos(angleRad - Radians(45))
+    origX = rotDim / 2 - newDim / 2
+    cropCoords = [origX] * 2 + [origX + newDim] * 2
+    return cropCoords
+
+#-------------------------------------------------------------------
+
+def Radians(angle):
+    return angle * np.pi / 180
+
+# -------------------------------------------------------------------
 
 def Degrees(angle):
     return angle * 180 / np.pi

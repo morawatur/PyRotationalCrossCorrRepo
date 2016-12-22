@@ -12,4 +12,4 @@ imgMatrix = imsup.PrepareImageMatrix(imgData, 512)
 img = imsup.Image(512, 512, imsup.Image.cmp['CAP'], imsup.Image.mem['CPU'])
 img.amPh.am = np.sqrt(imgMatrix).astype(np.float32)
 
-imsup.RotateImage(img, 30)
+imsup.RotateImage(img, 20)
