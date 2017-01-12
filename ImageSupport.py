@@ -452,6 +452,13 @@ def DetermineCropCoords(width, height, shift):
 
 #-------------------------------------------------------------------
 
+def DetermineCropCoordsForNewWidth(oldWidth, newWidth):
+    origX = (oldWidth - newWidth) // 2
+    cropCoords = [ origX ] * 2 + [ origX + newWidth ] * 2
+    return cropCoords
+
+#-------------------------------------------------------------------
+
 def DetermineEqualCropCoords(biggerWidth, smallerWidth):
     halfDiff = (biggerWidth - smallerWidth) / 2
     coords = [halfDiff] * 2 + [biggerWidth - halfDiff] * 2
@@ -606,21 +613,13 @@ def RotateImage(img, deltaPhi):
     # rotation
 
     blockDim, gridDim = ccfg.DetermineCudaConfigNew(img.amPh.am.shape)
-    # dorobic funkcje RotateImage wywolujaca RotateImage_dev z poziomu hosta
     RotateImage_dev[gridDim, blockDim](img.amPh.am, imgRotated.amPh.am, filled, deltaPhiRad)
-
-    DisplayAmpImage(img)
-    DisplayAmpImage(imgRotated)
 
     imgRotated.MoveToGPU()
     blockDim, gridDim = ccfg.DetermineCudaConfigNew(imgRotated.amPh.am.shape)
     InterpolateMissingPixels_dev[gridDim, blockDim](imgRotated.amPh.am, filled)
 
-    DisplayAmpImage(imgRotated)
-
-    cropCoords = DetermineCropCoordsAfterRotation(img.width, imgRotated.width, deltaPhi)
-    imgRotCropped = CropImageROICoords(imgRotated, cropCoords)
-    DisplayAmpImage(imgRotCropped)
+    return imgRotated
 
 #-------------------------------------------------------------------
 
@@ -680,9 +679,9 @@ def InterpolateMissingPixels_dev(img, filled):
 #-------------------------------------------------------------------
 
 def DetermineCropCoordsAfterRotation(imgDim, rotDim, angle):
-    angleRad = Radians(angle)
-    newDim = (1 / np.sqrt(2)) * imgDim / np.cos(angleRad - Radians(45))
-    origX = rotDim / 2 - newDim / 2
+    angleRad = Radians(angle % 90)
+    newDim = int((1 / np.sqrt(2)) * imgDim / np.cos(angleRad - Radians(45)))
+    origX = int(rotDim / 2 - newDim / 2)
     cropCoords = [origX] * 2 + [origX + newDim] * 2
     return cropCoords
 
@@ -696,3 +695,35 @@ def Radians(angle):
 def Degrees(angle):
     return angle * 180 / np.pi
 
+#-------------------------------------------------------------------
+
+def MagnifyImage(img, factor):
+    img.MoveToGPU()
+    img.ReIm2AmPh()
+    magHeight = int(factor * img.height)
+    magWidth = int(factor * img.width)
+    imgScaled = Image(magHeight, magWidth, img.cmpRepr, img.memType)
+    filled = cuda.to_device(np.zeros(imgScaled.amPh.am.shape, dtype=np.int32))
+
+    # magnification
+
+    blockDim, gridDim = ccfg.DetermineCudaConfigNew(img.amPh.am.shape)
+    MagnifyImage_dev[gridDim, blockDim](img.amPh.am, imgScaled.amPh.am, filled, factor)
+
+    imgScaled.MoveToGPU()
+    blockDim, gridDim = ccfg.DetermineCudaConfigNew(imgScaled.amPh.am.shape)
+    InterpolateMissingPixels_dev[gridDim, blockDim](imgScaled.amPh.am, filled)
+
+    return imgScaled
+
+#-------------------------------------------------------------------
+
+@cuda.jit('void(float32[:, :], float32[:, :], int32[:, :], float32)')
+def MagnifyImage_dev(img, imgMag, filled, factor):
+    x0, y0 = cuda.grid(2)
+    if x0 >= img.shape[0] or y0 >= img.shape[1]:
+        return
+    x1 = int(factor * x0)
+    y1 = int(factor * y0)
+    imgMag[y1, x1] = img[y0, x0]
+    filled[y1, x1] = 1
