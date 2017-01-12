@@ -229,7 +229,34 @@ def MaximizeMCFCore(img1, img2, nDiv, fragCoords, dfStepMin, dfStepMax, dfStepCh
 
 #-------------------------------------------------------------------
 
-def MaximizeMCFvsRotation(img1, img2):
+def MaximizeMCFvsRotation(img1, img2, angleMin, angleMax):
+    mcfMax = 0.0
+    mcfBest = imsup.Image(img1.height, img1.width, imsup.Image.cmp['CRI'], imsup.Image.mem['GPU'])
+    img2RotCropBest = imsup.Image(img1.height, img1.width, imsup.Image.cmp['CRI'], imsup.Image.mem['GPU'])
+    bestAngle = 0
+    for angle in range(angleMin, angleMax):
+        img2Rot = imsup.RotateImage(img2, angle)
+        rotCropCoords = imsup.DetermineCropCoordsAfterRotation(img2.width, img2Rot.width, angle)
+        img2RotCrop = imsup.CropImageROICoords(img2Rot, rotCropCoords)
+        # imsup.SaveAmpImage(img2RotCrop, 'img2Rot_{0}.png'.format(angle))
+        cropCoords = imsup.DetermineCropCoordsForNewWidth(img1.width, img2RotCrop.width)
+        img1Crop = imsup.CropImageROICoords(img1, cropCoords)
+        # imsup.SaveAmpImage(img1Crop, 'img1Crop_{0}.png'.format(angle))
+        mcf = CalcCrossCorrFun(img1Crop, img2RotCrop)
+        mcfMaxCurr = FindMaxInImage(mcf)
+        print(angle, mcfMaxCurr)
+        if mcfMaxCurr >= mcfMax:
+            mcfMax = mcfMaxCurr
+            mcfBest = mcf
+            img2RotCropBest = img2RotCrop
+            bestAngle = angle
+
+    print('Best rotation angle = {0:.2f} deg'.format(bestAngle))
+    return mcfBest, img2RotCropBest
+
+#-------------------------------------------------------------------
+
+def MaximizeMCFvsMagnification(img1, img2, factorMin, factorMax):
     pass
 
 #-------------------------------------------------------------------
